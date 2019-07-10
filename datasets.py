@@ -41,12 +41,14 @@ class SlidePatchData(data.Dataset):
         根据数字指标来得到一个样本，返回的是3元组，(image, y标签, patient_id)，
         其中y标签是shape为(2,)的ndarray，其第一个元素是status、第二个元素是time
         '''
-        img = Image.open(self.df['patch_file'].iloc[indx])
+        one_sample = self.df.iloc[indx, :]
+        y = one_sample[['status', 'survival_time']].values.astype('float')
+        patient_id = one_sample['patient_id']
+        file_name = one_sample['file_name']
+        file_path = one_sample['patch_file']
+        img = Image.open(file_path)
         if self.transfer is not None:
             img = self.transfer(img)
-        y = self.df[['status', 'survival_time']].iloc[indx].values
-        patient_id = self.df['patient_id'].iloc[indx]
-        file_name = self.df['file_name'].iloc[indx]
         return img, y, (patient_id, file_name)
 
     @property
@@ -220,15 +222,16 @@ def test():
 
     dataloader = data.DataLoader(
         dat, batch_size=2, shuffle=False, sampler=sampler)
-    for img, y, pid in dataloader:
+    for i, (img, y, pid) in enumerate(dataloader):
         print(img[:, 0, :2, :2])
         print(pid)
-        break
+        if i == 10:
+            break
 
-    for img, y, pid in dataloader:
-        print(img[:, 0, :2, :2])
-        print(pid)
-        break
+    # for img, y, pid in dataloader:
+    #     print(img[:, 0, :2, :2])
+    #     print(pid)
+    #     break
 
     # train_dat, test_dat = dat.split_by_patients(0.2)
     # print('=====train====')

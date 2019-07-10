@@ -12,9 +12,8 @@ import pandas as pd
 import argparse
 
 from datasets import SlidePatchData, OneEveryPatientSampler
-from networks import SurvivalPatchCNN, NegativeLogLikelihood
+from networks import SurvivalPatchCNN, NegativeLogLikelihood, SvmLoss
 import metrics as mm
-# import pysnooper
 
 
 class NoneScheduler:
@@ -91,7 +90,6 @@ def evaluate(
     return history
 
 
-# @pysnooper.snoop()
 def train(
     model, criterion, optimizer, dataloaders, scheduler=NoneScheduler(None),
     epoch=100, device=torch.device('cuda:0'), l2=0.0,
@@ -231,6 +229,10 @@ def main():
         '--cindex_reduction', default='mean',
         help='聚合同一张slide的patches时的聚合方式，默认时mean'
     )
+    parser.add_argument(
+        '--loss_type', default='cox',
+        help='使用的loss的类型，默认是cox，也可以是svmloss'
+    )
     args = parser.parse_args()
     save = args.save
     image_size = (args.image_size, args.image_size)
@@ -274,13 +276,17 @@ def main():
             train_dat, batch_size=batch_size, sampler=train_sampler,
             num_workers=num_workers),
         'valid': data.DataLoader(
-            valid_dat, batch_size=batch_size, sampler=test_sampler,
+            valid_dat, batch_size=batch_size,
+            sampler=test_sampler,
             num_workers=num_workers)
     }
 
     # ----- 构建网络和优化器 -----
     net = SurvivalPatchCNN()
-    criterion = NegativeLogLikelihood()
+    if args.loss_type == 'cox':
+        criterion = NegativeLogLikelihood()
+    elif args.loss_type == 'svmloss':
+        criterion = SvmLoss()
     optimizer = optim.Adam(net.parameters(), lr=lr)
     scorings = [mm.Loss(), mm.CIndexForSlide(reduction=cindex_reduction)]
 
