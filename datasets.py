@@ -120,6 +120,8 @@ class SlidePatchData(data.Dataset):
 
         if train_transfer is None:
             train_transfer = self.transfer
+        if test_transfer is None:
+            test_transfer = self.transfer
 
         return (
             SlidePatchData(train_df, train_transfer),

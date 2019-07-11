@@ -202,8 +202,8 @@ def main():
         help='patch会被resize到多大，默认时224 x 224'
     )
     parser.add_argument(
-        '-ts', '--test_size', default=0.2, type=float,
-        help='测试集的大小，默认时0.2'
+        '-vts', '--valid_test_size', default=(0.1, 0.1), type=float, nargs=2,
+        help='验证集、测试集的大小，默认时0.1, 0.1'
     )
     parser.add_argument(
         '-bs', '--batch_size', default=64, type=int,
@@ -222,8 +222,9 @@ def main():
         help='epoch 数量，默认是10'
     )
     parser.add_argument(
-        '-tp', '--test_patches', default=2, type=int,
-        help='测试时随机从每个patient中抽取的patches的数量，默认是2'
+        '-tp', '--test_patches', default=None, type=int,
+        help=('测试时随机从每个patient中抽取的patches的数量，默认是None，'
+              '即使用全部的patches进行测试')
     )
     parser.add_argument(
         '--cindex_reduction', default='mean',
@@ -233,16 +234,26 @@ def main():
         '--loss_type', default='cox',
         help='使用的loss的类型，默认是cox，也可以是svmloss'
     )
+    parser.add_argument(
+        '--zoom', default='40.0',
+        help="使用的放大倍数，默认是40.0"
+    )
+    parser.add_argument(
+        '--rank_ratio', default=1.0, type=float,
+        help="svmloss的rank_ratio，默认是1.0"
+    )
     args = parser.parse_args()
     save = args.save
     image_size = (args.image_size, args.image_size)
-    test_size = args.test_size
+    valid_size, test_size = args.test_size
     batch_size = args.batch_size
     num_workers = args.num_workers
     lr = args.learning_rate
     epoch = args.epoch
     test_patches = args.test_patches
     cindex_reduction = args.cindex_reduction
+    zoom = args.zoom
+    rank_ratio = args.rank_ratio
 
 
     # ----- 读取数据 -----
@@ -250,7 +261,8 @@ def main():
     tiles_dir = '/home/dl/NewDisk/Slides/TCGA-OV/Tiles'
 
     dat = SlidePatchData.from_demographic(
-        demographic_file, tiles_dir, transfer=transforms.ToTensor()
+        demographic_file, tiles_dir, transfer=transforms.ToTensor(),
+        zoom=zoom
     )
     train_transfer = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -267,10 +279,17 @@ def main():
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     train_dat, valid_dat = dat.split_by_patients(
-        test_size, train_transfer=train_transfer, test_transfer=test_transfer)
+        valid_size+test_size, train_transfer=train_transfer,
+        test_transfer=test_transfer
+    )
+    valid_dat, test_dat = valid_dat.split_by_patients(
+        test_size / (valid_size+test_size))
     train_sampler = OneEveryPatientSampler(train_dat)
-    test_sampler = OneEveryPatientSampler(
-        valid_dat, num_per_patients=test_patches)
+    if test_patches is not None:
+        test_sampler = OneEveryPatientSampler(
+            valid_dat, num_per_patients=test_patches)
+    else:
+        test_sampler = None
     dataloaders = {
         'train': data.DataLoader(
             train_dat, batch_size=batch_size, sampler=train_sampler,
@@ -278,7 +297,11 @@ def main():
         'valid': data.DataLoader(
             valid_dat, batch_size=batch_size,
             sampler=test_sampler,
-            num_workers=num_workers)
+            num_workers=num_workers),
+        'test': data.DataLoader(
+            test_dat, batch_size=batch_size,
+            sampler=test_sampler,
+            num_workers=num_workers),
     }
 
     # ----- 构建网络和优化器 -----
@@ -286,7 +309,7 @@ def main():
     if args.loss_type == 'cox':
         criterion = NegativeLogLikelihood()
     elif args.loss_type == 'svmloss':
-        criterion = SvmLoss()
+        criterion = SvmLoss(rank_ratio=rank_ratio)
     optimizer = optim.Adam(net.parameters(), lr=lr)
     scorings = [mm.Loss(), mm.CIndexForSlide(reduction=cindex_reduction)]
 
@@ -294,11 +317,18 @@ def main():
     net, hist = train(
         net, criterion, optimizer, dataloaders, epoch=epoch, metrics=scorings
     )
+    print('')
+
+    # ----- 最后的测试 -----
+    test_hist = evaluate(
+        net, dataloaders['test'], criterion, metrics=scorings)
 
     # 保存结果
     dirname = check_update_dirname(save)
     torch.save(net.state_dict(), os.path.join(dirname, 'model.pth'))
     pd.DataFrame(hist).to_csv(os.path.join(dirname, 'train.csv'))
+    with open(os.path.join(dirname, 'test.json'), 'w') as f:
+        json.dump(test_hist, f)
     with open(os.path.join(dirname, 'config.json'), 'w') as f:
         json.dump(args.__dict__, f)
 
